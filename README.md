@@ -1,7 +1,7 @@
 # Claude Code Razer Lights
 
 Drive your Razer device lighting from [Claude Code](https://www.claude.com/product/claude-code)
-status, using the Razer Chroma REST SDK on Windows.
+status, using the Razer Chroma REST SDK on Windows/WSL.
 
 - 🟢 **Green** — idle (Claude finished, waiting for you)
 - 🟡 **Yellow** — working
@@ -19,20 +19,30 @@ Tested with a **Razer Viper Mini** mouse and a **Razer Kraken V3** headset on
 ## How it works
 
 ```
-Claude Code hooks ──> light server (holds one Chroma session, heartbeats) ──> Razer Chroma SDK ──> devices
+Claude Code hooks ──> hook.sh (extracts session_id) ──> light server ──> Razer Chroma SDK ──> devices
 ```
 
 A small local HTTP server holds a single Chroma SDK session and keeps it alive
 with heartbeats. Claude Code [hooks](https://code.claude.com/docs/en/hooks) fire
-`curl` requests at the server on lifecycle events (session start/end, prompt
-submit, tool use, stop, permission prompt), and the server sets the matching
-color. A reference-counted session counter means control is only released when
-the **last** Claude Code window closes, and a watchdog force-releases the lights
-if a session dies without firing its end hook.
+on lifecycle events (session start/end, prompt submit, tool use, stop, permission
+prompt). Each hook runs `hook.sh`, which reads the `session_id` from the JSON
+payload Claude Code delivers via stdin, then calls the server with `?sid=<id>`.
+
+The server tracks state per session (`idle`, `working`, or `confirm`) and applies
+a priority rule to pick the color:
+
+- If **any** session is `confirm` → red blink (regardless of other sessions)
+- Else if **any** session is `working` → yellow
+- Else → green
+
+This means if one window is waiting for your confirmation while another is
+actively working, the lights keep blinking red until you resolve the confirmation.
+Control is only released when the **last** Claude Code window closes, and a
+watchdog force-releases the lights if a session dies without firing its end hook.
 
 ## Requirements
 
-- Windows 10/11
+- Windows 10/11 + WSL
 - **Razer Synapse** (3 or 4) running, with **Chroma Connect** installed and
   app/SDK control enabled for your devices. *Synapse must be running for the
   lights to change* — if it is closed, SDK calls silently succeed but nothing
@@ -44,11 +54,27 @@ if a session dies without firing its end hook.
 
 ### 1. Install
 
+The server runs on **Windows** (needs access to the Chroma SDK); the hook script
+runs in **WSL** (where Claude Code executes hooks).
+
+**Windows** — in PowerShell:
+
 ```powershell
 mkdir C:\razer-lights
 copy razer_light_server.py C:\razer-lights\
 pip install requests
 ```
+
+**WSL** — in bash:
+
+```bash
+mkdir -p /home/user/razer-lights
+cp hook.sh /home/user/razer-lights/
+chmod +x /home/user/razer-lights/hook.sh
+```
+
+Then update the paths in `claude-settings.example.json` to match your WSL location
+before merging it into your Claude Code settings.
 
 ### 2. Verify the Chroma SDK responds
 
@@ -70,14 +96,25 @@ python C:\razer-lights\razer_light_server.py
 ```
 
 In a second PowerShell window, walk through the states (use `curl.exe`, not the
-PowerShell `curl` alias):
+PowerShell `curl` alias). Each request passes a `?sid=` to identify the session:
 
 ```powershell
-curl.exe http://127.0.0.1:8777/session-start   # devices go green
-curl.exe http://127.0.0.1:8777/working         # yellow
-curl.exe http://127.0.0.1:8777/confirm         # red blinking
-curl.exe http://127.0.0.1:8777/idle            # green
-curl.exe http://127.0.0.1:8777/session-end     # release to Synapse default
+curl.exe "http://127.0.0.1:8777/session-start?sid=A"  # devices go green
+curl.exe "http://127.0.0.1:8777/working?sid=A"        # yellow
+curl.exe "http://127.0.0.1:8777/confirm?sid=A"        # red blinking
+curl.exe "http://127.0.0.1:8777/idle?sid=A"           # green
+curl.exe "http://127.0.0.1:8777/session-end?sid=A"    # release to Synapse default
+```
+
+To verify multi-session priority, simulate two sessions:
+
+```powershell
+curl.exe "http://127.0.0.1:8777/session-start?sid=A"
+curl.exe "http://127.0.0.1:8777/session-start?sid=B"
+curl.exe "http://127.0.0.1:8777/confirm?sid=A"        # red blinking
+curl.exe "http://127.0.0.1:8777/working?sid=B"        # still red (A needs attention)
+curl.exe "http://127.0.0.1:8777/idle?sid=A"           # now yellow (only B working)
+curl.exe "http://127.0.0.1:8777/idle?sid=B"           # green
 ```
 
 ### 4. Add the Claude Code hooks

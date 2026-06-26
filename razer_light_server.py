@@ -21,6 +21,7 @@ import time
 import threading
 import requests
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse, parse_qs
 
 CHROMA = "http://localhost:54235/razer/chromasdk"
 DEVICES = ("mouse", "headset")     # add/remove devices here
@@ -28,10 +29,36 @@ WATCHDOG_TIMEOUT = 600             # seconds of hook silence before force-releas
 LISTEN = ("127.0.0.1", 8777)
 
 session_uri = None
-active_sessions = 0
+session_states = {}    # sid -> "idle" | "working" | "confirm"
 blinking = False
 last_ping = time.time()
 lock = threading.Lock()
+
+
+def _effective_state():
+    """Priority: confirm > working > idle. Call under lock."""
+    vals = set(session_states.values())
+    if "confirm" in vals:
+        return "confirm"
+    if "working" in vals:
+        return "working"
+    return "idle"
+
+
+def _apply_state():
+    """Update lighting to match _effective_state(). Call under lock."""
+    global blinking
+    state = _effective_state()
+    if state == "confirm":
+        if not blinking:
+            blinking = True
+            threading.Thread(target=blink_loop, daemon=True).start()
+    elif state == "working":
+        blinking = False
+        set_color(255, 200, 0)
+    else:
+        blinking = False
+        set_color(0, 255, 0)
 
 
 def init_session():
@@ -82,13 +109,12 @@ def heartbeat():
 def watchdog():
     """If no hook has pinged in WATCHDOG_TIMEOUT seconds (e.g. Claude Code
     crashed without firing SessionEnd), force-release the lights."""
-    global active_sessions
     while True:
         time.sleep(30)
         with lock:
             if session_uri and (time.time() - last_ping) > WATCHDOG_TIMEOUT:
                 print("Watchdog: forcing release after inactivity")
-                active_sessions = 0
+                session_states.clear()
                 end_session()
 
 
@@ -116,32 +142,37 @@ def blink_loop():
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        global active_sessions, blinking, last_ping
+        global blinking, last_ping
+        parsed = urlparse(self.path)
+        sid = parse_qs(parsed.query).get("sid", ["default"])[0]
+        path = parsed.path
+
         with lock:
             last_ping = time.time()
 
-            if self.path == "/session-start":
-                active_sessions += 1
-                if active_sessions == 1:
+            if path == "/session-start":
+                if not session_states:
                     init_session()
                     set_color(0, 255, 0)             # green on takeover
+                session_states[sid] = "idle"
 
-            elif self.path == "/session-end":
-                active_sessions = max(0, active_sessions - 1)
-                if active_sessions == 0:
+            elif path == "/session-end":
+                session_states.pop(sid, None)
+                if not session_states:
                     end_session()                    # release to Synapse default
+                elif session_uri:
+                    _apply_state()
 
             elif session_uri:                        # only act while we hold control
-                if self.path == "/idle":
-                    blinking = False
-                    set_color(0, 255, 0)             # green
-                elif self.path == "/working":
-                    blinking = False
-                    set_color(255, 200, 0)           # yellow
-                elif self.path == "/confirm":
-                    if not blinking:
-                        blinking = True
-                        threading.Thread(target=blink_loop, daemon=True).start()
+                if path == "/idle":
+                    session_states[sid] = "idle"
+                    _apply_state()
+                elif path == "/working":
+                    session_states[sid] = "working"
+                    _apply_state()
+                elif path == "/confirm":
+                    session_states[sid] = "confirm"
+                    _apply_state()
 
         self.send_response(200)
         self.end_headers()
