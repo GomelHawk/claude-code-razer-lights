@@ -1,5 +1,7 @@
 # Claude Code Razer Lights
 
+![CI](https://github.com/GomelHawk/claude-code-razer-lights/actions/workflows/ci.yml/badge.svg)
+
 Drive your Razer device lighting from [Claude Code](https://www.claude.com/product/claude-code)
 status, using the Razer Chroma REST SDK on Windows/WSL.
 
