@@ -163,16 +163,13 @@ class Handler(BaseHTTPRequestHandler):
                 elif session_uri:
                     _apply_state()
 
-            elif session_uri:                        # only act while we hold control
-                if path == "/idle":
-                    session_states[sid] = "idle"
-                    _apply_state()
-                elif path == "/working":
-                    session_states[sid] = "working"
-                    _apply_state()
-                elif path == "/confirm":
-                    session_states[sid] = "confirm"
-                    _apply_state()
+            elif path in ("/idle", "/working", "/confirm"):
+                # Re-init the Chroma session if it was released while the agent
+                # kept running (spurious SessionEnd, context reset, etc.).
+                if not session_uri:
+                    init_session()
+                session_states[sid] = path.lstrip("/")
+                _apply_state()
 
         self.send_response(200)
         self.end_headers()

@@ -162,11 +162,31 @@ def test_confirm_updates_state(with_session):
     assert srv.session_states["A"] == "confirm"
 
 
-def test_no_apply_without_session_uri():
+def test_working_without_session_uri_reinits():
+    # Spurious session-end dropped the Chroma handle; next /working must recover.
     srv.session_states["A"] = "idle"
-    with patch.object(srv, "_apply_state") as mock_apply:
+    with patch.object(srv, "init_session") as mock_init, \
+         patch.object(srv, "_apply_state") as mock_apply:
         make_handler("/working?sid=A").do_GET()
-    mock_apply.assert_not_called()
+    mock_init.assert_called_once()
+    mock_apply.assert_called_once()
+    assert srv.session_states["A"] == "working"
+
+
+def test_idle_without_session_uri_reinits():
+    srv.session_states["A"] = "working"
+    with patch.object(srv, "init_session") as mock_init, \
+         patch.object(srv, "_apply_state"):
+        make_handler("/idle?sid=A").do_GET()
+    mock_init.assert_called_once()
+
+
+def test_confirm_without_session_uri_reinits():
+    srv.session_states["A"] = "working"
+    with patch.object(srv, "init_session") as mock_init, \
+         patch.object(srv, "_apply_state"):
+        make_handler("/confirm?sid=A").do_GET()
+    mock_init.assert_called_once()
 
 
 # --- default sid fallback ---
