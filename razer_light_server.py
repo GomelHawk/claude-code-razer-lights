@@ -19,6 +19,8 @@
 
 import time
 import threading
+import logging
+import os
 import requests
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -27,6 +29,20 @@ CHROMA = "http://localhost:54235/razer/chromasdk"
 DEVICES = ("mouse", "headset")     # add/remove devices here
 WATCHDOG_TIMEOUT = 600             # seconds of hook silence before force-release
 LISTEN = ("127.0.0.1", 8777)
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "razer_light_server.log")
+
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger(__name__)
+
+
+def _print(msg):
+    print(msg)
+    log.info(msg)
 
 session_uri = None
 session_states = {}    # sid -> "idle" | "working" | "confirm"
@@ -75,12 +91,12 @@ def init_session():
                 "category": "application",
             }, timeout=5)
             session_uri = r.json()["uri"]   # SDK returns the real session URI/port
-            print("Session opened:", session_uri)
+            _print("Session opened: " + session_uri)
             return
         except Exception as e:
-            print(f"init_session attempt {attempt + 1} failed:", repr(e))
+            _print(f"init_session attempt {attempt + 1} failed: {e!r}")
             time.sleep(1)
-    print("init_session: giving up (is Synapse running?)")
+    _print("init_session: giving up (is Synapse running?)")
 
 
 def end_session():
@@ -90,9 +106,9 @@ def end_session():
     if session_uri:
         try:
             requests.delete(session_uri, timeout=5)
-            print("Session released:", session_uri)
+            _print("Session released: " + session_uri)
         except Exception as e:
-            print("end_session failed:", repr(e))
+            _print(f"end_session failed: {e!r}")
         session_uri = None
 
 
@@ -113,23 +129,23 @@ def watchdog():
         time.sleep(30)
         with lock:
             if session_uri and (time.time() - last_ping) > WATCHDOG_TIMEOUT:
-                print("Watchdog: forcing release after inactivity")
+                _print("Watchdog: forcing release after inactivity")
                 session_states.clear()
                 end_session()
 
 
 def set_color(r, g, b):
     if not session_uri:
-        print("set_color skipped - no active session")
+        _print("set_color skipped - no active session")
         return
     bgr = (b << 16) | (g << 8) | r     # Chroma uses BGR, not RGB
     payload = {"effect": "CHROMA_STATIC", "param": {"color": bgr}}
     for device in DEVICES:
         try:
             resp = requests.put(session_uri + "/" + device, json=payload, timeout=5)
-            print(f"set_color {device} {(r, g, b)} -> {resp.status_code}")
+            _print(f"set_color {device} {(r, g, b)} -> {resp.status_code}")
         except Exception as e:
-            print(f"set_color {device} FAILED:", repr(e))
+            _print(f"set_color {device} FAILED: {e!r}")
 
 
 def blink_loop():
@@ -179,8 +195,18 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    try:
+        server = HTTPServer(LISTEN, Handler)
+    except OSError as e:
+        _print(f"Failed to bind {LISTEN[0]}:{LISTEN[1]} — already running? {e!r}")
+        raise SystemExit(0)   # not an error; another instance owns the port
+
     threading.Thread(target=heartbeat, daemon=True).start()
     threading.Thread(target=watchdog, daemon=True).start()
-    print(f"Razer light server listening on http://{LISTEN[0]}:{LISTEN[1]}")
-    print("Note: Razer Synapse must be running for lighting to change.")
-    HTTPServer(LISTEN, Handler).serve_forever()
+    _print(f"Razer light server listening on http://{LISTEN[0]}:{LISTEN[1]}")
+    _print("Note: Razer Synapse must be running for lighting to change.")
+    try:
+        server.serve_forever()
+    except Exception as e:
+        _print(f"serve_forever exited unexpectedly: {e!r}")
+        raise

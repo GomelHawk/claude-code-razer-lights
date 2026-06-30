@@ -131,16 +131,37 @@ project instead.
 In an **Administrator** PowerShell:
 
 ```powershell
-$action = New-ScheduledTaskAction -Execute "pythonw.exe" -Argument "C:\razer-lights\razer_light_server.py"
+$action = New-ScheduledTaskAction `
+    -Execute "C:\Python314\pythonw.exe" `
+    -Argument "C:\razer-lights\razer_light_server.py" `
+    -WorkingDirectory "C:\razer-lights"
+
 $trigger = New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$trigger.Delay = "PT10S"   # wait 10 s for Synapse to start
+
+$settings = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -RestartCount 3 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -MultipleInstances IgnoreNew
+
 Register-ScheduledTask -TaskName "RazerLights" -Action $action -Trigger $trigger -Settings $settings -RunLevel Limited
 Start-ScheduledTask -TaskName "RazerLights"
 ```
 
-`pythonw.exe` runs without a console window. (Its lack of a console also means
-the script's `print` diagnostics are discarded — use plain `python.exe` when you
-want to see them.)
+Use the **full path** to `pythonw.exe` (adjust if your Python is installed elsewhere)
+so the task doesn't depend on `PATH` being set correctly in the scheduler's environment.
+The 10-second delay gives Razer Synapse time to start before the server tries to open
+a Chroma session.
+
+`pythonw.exe` runs without a console window. All diagnostics are written to
+`razer_light_server.log` in the same directory as the script — check that file
+if something isn't working.
+
+If the server is already running when the trigger fires (e.g. after an unlock
+rather than a full logout), the new instance detects the occupied port, logs a
+message, and exits cleanly so the task doesn't show as failed.
 
 ### 6. Test through Claude Code
 
@@ -163,6 +184,11 @@ not RGB).
 
 ## Troubleshooting
 
+- **Scheduled task shows exit code 1 / server not running** — check
+  `razer_light_server.log` in the script directory for the error. Common causes:
+  Python not found (use the full path to `pythonw.exe`), or the port was already
+  in use (the log will say so and the exit code will be 0 in that case — a
+  previous instance is still running).
 - **SDK returns `result: 0` but nothing lights up** — Synapse isn't running, or
   the device isn't on app/Chroma-controlled lighting (onboard/fixed effects
   override the SDK). Open Chroma Studio and make sure the device is
