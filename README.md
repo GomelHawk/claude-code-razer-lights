@@ -146,7 +146,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -RestartInterval (New-TimeSpan -Minutes 1) `
     -MultipleInstances IgnoreNew
 
-Register-ScheduledTask -TaskName "RazerLights" -Action $action -Trigger $trigger -Settings $settings -RunLevel Limited
+Register-ScheduledTask -TaskName "RazerLights" -Action $action -Trigger $trigger -Settings $settings -RunLevel Limited -Force
 Start-ScheduledTask -TaskName "RazerLights"
 ```
 
@@ -154,6 +154,11 @@ Use the **full path** to `pythonw.exe` (adjust if your Python is installed elsew
 so the task doesn't depend on `PATH` being set correctly in the scheduler's environment.
 The 10-second delay gives Razer Synapse time to start before the server tries to open
 a Chroma session.
+
+The `-Force` flag overwrites any existing `RazerLights` task, so this command is
+safe to re-run whenever you change the action/trigger/settings above. Without it,
+re-registering fails with a "file already exists" error (`HRESULT 0x800700b7`)
+because a task with that name is already registered.
 
 `pythonw.exe` runs without a console window. All diagnostics are written to
 `razer_light_server.log` in the same directory as the script — check that file
