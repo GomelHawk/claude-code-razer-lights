@@ -42,6 +42,12 @@ actively working, the lights keep blinking red until you resolve the confirmatio
 Control is only released when the **last** Claude Code window closes, and a
 watchdog force-releases the lights if a session dies without firing its end hook.
 
+Claude Code has no hook that fires at the exact moment you answer a permission
+prompt — the next event after your answer is the tool actually running, i.e.
+`PostToolUse` (on approval) or `PostToolUseFailure` (on denial/error). Both are
+wired to `working` so the red blink clears as soon as possible after you answer,
+instead of waiting for the next unrelated `PreToolUse`/`Stop` hook.
+
 ## Requirements
 
 - Windows 10/11 + WSL

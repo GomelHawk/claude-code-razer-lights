@@ -12,6 +12,12 @@
     "PreToolUse": [
       { "matcher": "*", "hooks": [ { "type": "command", "command": "/home/user/your_path/hook.sh working", "timeout": 5 } ] }
     ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "/home/user/your_path/hook.sh working", "timeout": 5 } ] }
+    ],
+    "PostToolUseFailure": [
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "/home/user/your_path/hook.sh working", "timeout": 5 } ] }
+    ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "/home/user/your_path/hook.sh idle", "timeout": 5 } ] }
     ],
