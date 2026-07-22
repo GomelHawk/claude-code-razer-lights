@@ -48,6 +48,90 @@ prompt — the next event after your answer is the tool actually running, i.e.
 wired to `working` so the red blink clears as soon as possible after you answer,
 instead of waiting for the next unrelated `PreToolUse`/`Stop` hook.
 
+## Tray app (colored sphere + usage)
+
+A separate Windows tray companion, `tray_app.py`, shows a colored **sphere** that
+mirrors the Razer lighting, plus a click-to-open **usage flyout**:
+
+- 🟢 green — idle · 🟡 yellow — working · 🔴 red, blinking — waiting for
+  confirmation · ⚫ grey — no active session
+- **Click the sphere** to open a card with your Claude usage — the same 5-hour,
+  weekly, and usage-credit figures the `/usage` command shows, with reset timers.
+- Optional soft **chime** when a session needs confirmation (right-click menu).
+
+The sphere state comes from a read-only `GET /state` endpoint on the light server
+(added for this; it never affects the lighting). Usage comes from `usage.py`,
+which calls the same endpoint Claude Code's `/usage` uses and falls back to
+reconstructing totals from the local transcripts if that is unavailable.
+
+```powershell
+pip install PySide6
+python C:\razer-lights\tray_app.py
+```
+
+`usage.py` also runs standalone for a terminal readout:
+
+```powershell
+python C:\razer-lights\usage.py          # live 5-hour / weekly / credits
+python C:\razer-lights\usage.py --json   # raw endpoint response
+python C:\razer-lights\usage.py --fallback   # force the local-transcript estimate
+```
+
+**WSL note:** the server and tray run on Windows, but Claude Code's logs and
+OAuth token live in WSL. Rather than set `CLAUDE_HOME` every launch, drop a
+`tray_config.json` next to `tray_app.py` (see
+[`tray_config.example.json`](tray_config.example.json)):
+
+```json
+{
+  "claude_home": "\\\\wsl.localhost\\Ubuntu\\home\\<user>\\.claude",
+  "state_url": "http://127.0.0.1:8777/state"
+}
+```
+
+Resolution order is env var → `tray_config.json` → default. The tray reads the
+OAuth token fresh from `.credentials.json` on each poll; Claude Code refreshes
+that file while it runs, so no separate login is needed.
+
+**Notes:**
+
+- The **sphere follows the light server** — if `razer_light_server.py` isn't
+  running (or no Claude session is active), the sphere is grey; the tooltip says
+  which.
+- Usage is polled infrequently (every ~5 min, plus on open when stale) because
+  the usage endpoint rate-limits (`429`); the last official figures are cached to
+  `usage_cache.json`, so the card is never blank and a `429` never replaces good
+  data with the estimate.
+- Diagnostics are written to `tray_app.log` next to the script.
+
+### Prebuilt executables (no Python needed)
+
+Tagged releases ship Windows executables built by CI
+([`.github/workflows/build.yml`](.github/workflows/build.yml)) — end users need
+no Python or `pip install`:
+
+1. Download `ClaudeRazerTray.exe`, `RazerLightServer.exe`, and
+   `tray_config.example.json` from the latest Release.
+2. Put them in a folder (e.g. `C:\razer-lights`), rename
+   `tray_config.example.json` → `tray_config.json`, and set `claude_home` to your
+   WSL `.claude` path.
+3. Run `RazerLightServer.exe` (or register it as the `RazerLights` scheduled task,
+   substituting the exe for `pythonw.exe … razer_light_server.py`), then run
+   `ClaudeRazerTray.exe`.
+
+Config, logs, and the usage cache are written next to the executables.
+
+Build them yourself on a Windows machine:
+
+```powershell
+pip install pyinstaller pyside6 requests
+pyinstaller --onefile --windowed --name ClaudeRazerTray --add-data "assets/claude_spark.png;assets" tray_app.py
+pyinstaller --onefile --windowed --name RazerLightServer razer_light_server.py
+```
+
+Or run the **Build Windows exe** workflow (Actions → Run workflow) for downloadable
+artifacts; pushing a `vX.Y.Z` tag attaches the exes to a GitHub Release.
+
 ## Requirements
 
 - Windows 10/11 + WSL
@@ -55,7 +139,8 @@ instead of waiting for the next unrelated `PreToolUse`/`Stop` hook.
   app/SDK control enabled for your devices. *Synapse must be running for the
   lights to change* — if it is closed, SDK calls silently succeed but nothing
   lights up.
-- Python 3.9+ and `pip install requests`
+- Python 3.9+ and `pip install requests` (plus `pip install PySide6` for the
+  optional tray app)
 - Claude Code
 
 ## Setup

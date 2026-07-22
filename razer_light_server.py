@@ -21,15 +21,19 @@ import time
 import threading
 import logging
 import os
+import sys
+import json
 import requests
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 CHROMA = "http://localhost:54235/razer/chromasdk"
 DEVICES = ("mouse", "headset")     # add/remove devices here
 WATCHDOG_TIMEOUT = 600             # seconds of hook silence before force-release
 LISTEN = ("127.0.0.1", 8777)
-LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "razer_light_server.log")
+_BASE_DIR = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) \
+    else os.path.dirname(os.path.abspath(__file__))
+LOG_FILE = os.path.join(_BASE_DIR, "razer_light_server.log")
 
 logging.basicConfig(
     filename=LOG_FILE,
@@ -157,11 +161,54 @@ def blink_loop():
 
 
 class Handler(BaseHTTPRequestHandler):
+    def _send_json(self, obj):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         global blinking, last_ping
         parsed = urlparse(self.path)
-        sid = parse_qs(parsed.query).get("sid", ["default"])[0]
         path = parsed.path
+
+        # Read-only status for the tray app. Must NOT touch last_ping, or polling
+        # it would keep the crash-safety watchdog from ever releasing the lights.
+        if path == "/state":
+            # Best-effort read WITHOUT the lock, so the tray stays fast even
+            # while a slow Chroma update holds it. Must NOT touch last_ping, or
+            # polling would defeat the crash-safety watchdog.
+            try:
+                sessions = dict(session_states)
+            except RuntimeError:          # dict mutated mid-copy
+                sessions = {}
+            vals = set(sessions.values())
+            effective = ("confirm" if "confirm" in vals
+                         else "working" if "working" in vals
+                         else "idle" if sessions else "none")
+            self._send_json({
+                "effective": effective,
+                "sessions": sessions,
+                "count": len(sessions),
+                "blinking": blinking,
+                "active": session_uri is not None,
+            })
+            return
+
+        sid = parse_qs(parsed.query).get("sid", ["default"])[0]
+
+        # Acknowledge the hook IMMEDIATELY, before any (possibly slow) Chroma
+        # calls, so the hook's short `curl -m 2` never times out on lighting I/O.
+        # Content-Length: 0 lets curl finish without waiting for connection close.
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+        try:
+            self.wfile.flush()
+        except OSError:
+            pass
 
         with lock:
             last_ping = time.time()
@@ -187,16 +234,14 @@ class Handler(BaseHTTPRequestHandler):
                 session_states[sid] = path.lstrip("/")
                 _apply_state()
 
-        self.send_response(200)
-        self.end_headers()
-
     def log_message(self, *args):
         pass
 
 
 if __name__ == "__main__":
     try:
-        server = HTTPServer(LISTEN, Handler)
+        server = ThreadingHTTPServer(LISTEN, Handler)
+        server.daemon_threads = True
     except OSError as e:
         _print(f"Failed to bind {LISTEN[0]}:{LISTEN[1]} — already running? {e!r}")
         raise SystemExit(0)   # not an error; another instance owns the port

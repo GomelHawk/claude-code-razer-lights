@@ -24,7 +24,9 @@ def make_handler(path):
     handler = srv.Handler.__new__(srv.Handler)
     handler.path = path
     handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
     handler.end_headers = MagicMock()
+    handler.wfile = MagicMock()
     return handler
 
 
@@ -223,6 +225,35 @@ def test_two_confirms_both_must_resolve():
     assert srv._effective_state() == "confirm"
     srv.session_states["B"] = "idle"
     assert srv._effective_state() == "idle"
+
+
+# --- /state endpoint ---
+
+def test_state_reports_effective_and_count():
+    import json
+    srv.session_states.update({"A": "working", "B": "idle"})
+    h = make_handler("/state")
+    h.do_GET()
+    body = h.wfile.write.call_args[0][0].decode()
+    data = json.loads(body)
+    assert data["effective"] == "working"
+    assert data["count"] == 2
+
+
+def test_state_empty_is_none():
+    import json
+    h = make_handler("/state")
+    h.do_GET()
+    data = json.loads(h.wfile.write.call_args[0][0].decode())
+    assert data["effective"] == "none"
+    assert data["count"] == 0
+
+
+def test_state_does_not_update_last_ping():
+    # Tray polling /state must not reset the watchdog's inactivity timer.
+    srv.last_ping = 0
+    make_handler("/state").do_GET()
+    assert srv.last_ping == 0
 
 
 # --- watchdog condition ---

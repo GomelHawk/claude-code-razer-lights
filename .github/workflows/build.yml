@@ -1,0 +1,52 @@
+name: Build Windows exe
+
+on:
+  push:
+    tags: ["v*"]          # tag a release (e.g. v1.0.0) -> attach exes to the Release
+  workflow_dispatch: {}    # manual run -> exes as downloadable build artifacts
+
+permissions:
+  contents: write          # needed to create/update the Release on tags
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps
+        run: pip install pyinstaller pyside6 requests
+
+      - name: Build tray app (windowed, no console)
+        run: pyinstaller --onefile --windowed --name ClaudeRazerTray --add-data "assets/claude_spark.png;assets" tray_app.py
+
+      - name: Build light server (windowed, no console)
+        run: pyinstaller --onefile --windowed --name RazerLightServer razer_light_server.py
+
+      - name: Stage package
+        shell: cmd
+        run: |
+          mkdir dist_pkg
+          copy dist\ClaudeRazerTray.exe dist_pkg\
+          copy dist\RazerLightServer.exe dist_pkg\
+          copy tray_config.example.json dist_pkg\
+          copy README.md dist_pkg\
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-razer-lights-windows
+          path: dist_pkg/*
+
+      - name: Attach to GitHub Release (on tags)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ClaudeRazerTray.exe
+            dist/RazerLightServer.exe
+            tray_config.example.json

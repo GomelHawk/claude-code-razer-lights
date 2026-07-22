@@ -16,3 +16,14 @@ Thumbs.db
 # Local overrides
 *.local
 settings.local.json
+
+# PyInstaller build output
+build/
+dist/
+*.spec
+
+# Tray/server runtime files (machine-specific)
+tray_config.json
+tray_app.log
+usage_cache.json
+razer_light_server.log
