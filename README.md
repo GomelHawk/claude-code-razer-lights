@@ -2,13 +2,27 @@
 
 ![CI](https://github.com/GomelHawk/claude-code-razer-lights/actions/workflows/ci.yml/badge.svg)
 
-Drive your Razer device lighting from [Claude Code](https://www.claude.com/product/claude-code)
-status, using the Razer Chroma REST SDK on Windows/WSL.
+Two **independent** [Claude Code](https://www.claude.com/product/claude-code)
+companions in one repo — use either on its own:
+
+1. **Razer lighting** — drives your Razer device LEDs from Claude Code's status via
+   the Chroma REST SDK. *Windows/WSL; needs Razer hardware + Synapse.*
+2. **Tray app + usage stats** — a system-tray / menu-bar icon that mirrors the same
+   status, plus a click-to-open panel with your Claude usage (5-hour, weekly, and
+   credit limits — the same data as `/usage`). *Windows, Linux, and macOS; needs no
+   Razer hardware.*
+
+They share only a tiny local status server, so **the lights work without the tray,
+and the tray + usage work without any Razer device.**
+
+**Set up for your platform:** [Windows / WSL](#setup) · [Ubuntu / GNOME](#native-linux-ubuntu--gnome) · [macOS](#macos) · [prebuilt Windows exe](#prebuilt-executables-no-python-needed) · [tray + usage](#tray-app-claude-spark-icon--usage)
+
+Both the lights and the tray icon show the same Claude status:
 
 - 🟢 **Green** — idle (Claude finished, waiting for you)
 - 🟡 **Yellow** — working
 - 🔴 **Red, blinking** — Claude is waiting for confirmation (a permission prompt)
-- ⚫ **No session** — control is released back to your normal Synapse lighting
+- ⚫ **No session** — lights release to your normal Synapse lighting; the tray icon shows the neutral Claude terracotta
 
 When no Claude Code session is running, the script holds no Chroma session, so
 Synapse drives your lighting exactly as it normally would. The lights are only
@@ -379,6 +393,134 @@ not RGB).
 - **Manual testing leaves things confused** — each manual SDK `POST` opens a
   session that you must `DELETE`; orphaned sessions interfere with lighting.
   Restart Synapse to clear them, and prefer testing through the running server.
+
+## Native Linux (Ubuntu / GNOME)
+
+The **tray icon + usage stats** work on native Ubuntu, and it's simpler than the
+Windows/WSL setup because everything runs on one machine — no WSL boundary, no
+UNC path, `CLAUDE_HOME` defaults to `~/.claude`.
+
+> **Physical device lighting is not available on Linux yet.** The Chroma REST SDK
+> is Windows-only, so run the server in status-only mode (`RAZER_LIGHTS=0`). A
+> cross-platform lighting backend (OpenRGB — also covers Logitech) is planned;
+> until then the sphere/tray status and usage work, but no LEDs are driven.
+
+### 1. Install
+
+```bash
+sudo apt install python3 python3-pip
+pip install --user requests PySide6
+mkdir -p ~/razer-lights
+cp razer_light_server.py usage.py tray_app.py hook.sh ~/razer-lights/
+cp -r assets ~/razer-lights/
+chmod +x ~/razer-lights/hook.sh
+```
+
+Edit `~/razer-lights/hook.sh` and change `curl.exe` → `curl` (native Linux has
+plain `curl`, not the Windows one).
+
+### 2. Hooks
+
+Same as the Windows steps: merge `claude-settings.example.json` into
+`~/.claude/settings.json`, pointing each command at
+`/home/<user>/razer-lights/hook.sh`.
+
+### 3. GNOME tray support
+
+GNOME dropped legacy tray icons, so Qt's tray needs an AppIndicator extension.
+Ubuntu usually ships it — just make sure it's enabled:
+
+```bash
+# Ubuntu (often preinstalled):
+gnome-extensions enable ubuntu-appindicators@ubuntu.com
+# Upstream GNOME:
+sudo apt install gnome-shell-extension-appindicator && \
+  gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com
+```
+
+(KDE, XFCE, Cinnamon, etc. show tray icons natively — no extension needed.)
+
+### 4. Autostart at login (systemd user services)
+
+Create `~/.config/systemd/user/razer-lights.service`:
+
+```ini
+[Unit]
+Description=Claude Code status server
+[Service]
+Environment=RAZER_LIGHTS=0
+ExecStart=%h/.local/bin/python3 %h/razer-lights/razer_light_server.py
+Restart=on-failure
+[Install]
+WantedBy=default.target
+```
+
+And `~/.config/systemd/user/razer-lights-tray.service`:
+
+```ini
+[Unit]
+Description=Claude usage tray
+After=razer-lights.service graphical-session.target
+PartOf=graphical-session.target
+[Service]
+ExecStart=/usr/bin/python3 %h/razer-lights/tray_app.py
+Restart=on-failure
+[Install]
+WantedBy=graphical-session.target
+```
+
+Enable both (use the correct `python3` path — `which python3`):
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now razer-lights.service razer-lights-tray.service
+journalctl --user -u razer-lights-tray.service -f   # logs
+```
+
+The tray icon turns green/yellow/red/terracotta with Claude's state and the usage
+flyout works exactly as on Windows — the server just runs as a status broker
+without touching any devices.
+
+## macOS
+
+The **tray icon + usage stats** work on macOS too — and the tray is nicer here: Qt
+renders it as a native **menu-bar item**, so no GNOME-style extension is needed.
+
+> **No physical lighting on macOS.** Razer discontinued Synapse for macOS (no
+> Chroma SDK), so run status-only with `RAZER_LIGHTS=0`. The menu-bar status and
+> usage flyout work exactly as elsewhere.
+
+Install and hooks are the same as the [Linux steps](#native-linux-ubuntu--gnome)
+(`pip install requests PySide6`, copy the files, use plain `curl` in `hook.sh`,
+merge `claude-settings.example.json`). Use a real Python (e.g. Homebrew
+`/opt/homebrew/bin/python3`), not the Xcode stub.
+
+**Autostart at login (launchd).** Create
+`~/Library/LaunchAgents/com.claude.razer-server.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.claude.razer-server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/python3</string>
+    <string>/Users/<user>/razer-lights/razer_light_server.py</string>
+  </array>
+  <key>EnvironmentVariables</key><dict><key>RAZER_LIGHTS</key><string>0</string></dict>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+</dict></plist>
+```
+
+And `~/Library/LaunchAgents/com.claude.razer-tray.plist` (same shape, `Label`
+`com.claude.razer-tray`, `ProgramArguments` pointing at `tray_app.py`, no
+`EnvironmentVariables`). Load both:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.claude.razer-server.plist
+launchctl load ~/Library/LaunchAgents/com.claude.razer-tray.plist
+```
 
 ## Notes
 
