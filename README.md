@@ -126,6 +126,24 @@ that file while it runs, so no separate login is needed.
   data with the estimate.
 - Diagnostics are written to `tray_app.log` next to the script.
 
+### No Razer devices? (status + usage only)
+
+You don't need any Razer hardware or Synapse to use the tray icon and usage
+stats — the light server doubles as a status broker. Run the server and the tray
+as usual: the icon still turns green/yellow/red/terracotta with Claude's state and
+the flyout still shows your usage; only the physical lights are skipped.
+
+If Chroma isn't reachable the server detects it and backs off (it won't retry on
+every hook), so status stays responsive. To skip the Chroma SDK entirely and keep
+the log clean, start the server with `RAZER_LIGHTS=0`:
+
+```powershell
+$env:RAZER_LIGHTS = "0"; python C:\razer-lights\razer_light_server.py
+```
+
+(For the scheduled task, add `RAZER_LIGHTS=0` to the task's environment, or leave
+it out — the automatic back-off makes device-less operation fine either way.)
+
 ### Prebuilt executables (no Python needed)
 
 Tagged releases ship Windows executables built by CI
@@ -337,6 +355,7 @@ Edit the constants at the top of `razer_light_server.py`:
 | `DEVICES` | `("mouse", "headset")` | Chroma device endpoints to drive. Options include `mouse`, `keyboard`, `headset`, `mousepad`, `keypad`, `chromalink`. |
 | `WATCHDOG_TIMEOUT` | `600` | Seconds of hook silence before the lights are force-released (crash safety). |
 | `LISTEN` | `127.0.0.1:8777` | Where the local server listens. |
+| `RAZER_LIGHTS` (env) | `1` | Set to `0` to skip the Chroma SDK entirely (status + usage still work; no devices needed). |
 
 Colors are set in `set_color` / the handler (note the Chroma SDK uses **BGR**,
 not RGB).

@@ -31,6 +31,10 @@ CHROMA = "http://localhost:54235/razer/chromasdk"
 DEVICES = ("mouse", "headset")     # add/remove devices here
 WATCHDOG_TIMEOUT = 600             # seconds of hook silence before force-release
 LISTEN = ("127.0.0.1", 8777)
+INIT_COOLDOWN = 60                 # back off this long after Chroma is unavailable
+# Set RAZER_LIGHTS=0 to run WITHOUT any Razer hardware: the server still tracks
+# Claude status for the tray + usage; it just never calls the Chroma SDK.
+LIGHTS_ENABLED = os.environ.get("RAZER_LIGHTS", "1").lower() not in ("0", "false", "no")
 _BASE_DIR = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) \
     else os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(_BASE_DIR, "razer_light_server.log")
@@ -52,6 +56,7 @@ session_uri = None
 session_states = {}    # sid -> "idle" | "working" | "confirm"
 blinking = False
 last_ping = time.time()
+init_cooldown_until = 0.0   # don't retry Chroma before this time (device-less setups)
 lock = threading.Lock()
 
 
@@ -82,10 +87,16 @@ def _apply_state():
 
 
 def init_session():
-    """Open a Chroma session and take control of lighting. Retries briefly in
-    case Synapse is still coming up."""
-    global session_uri
-    for attempt in range(5):
+    """Open a Chroma session and take control of lighting. No-ops when lighting
+    is disabled, and backs off when Chroma/Synapse is unavailable so a device-less
+    setup doesn't retry (~seconds) on every hook — status is still tracked either
+    way, so the tray and usage keep working without any Razer hardware."""
+    global session_uri, init_cooldown_until
+    if not LIGHTS_ENABLED:
+        return
+    if time.time() < init_cooldown_until:
+        return
+    for attempt in range(3):
         try:
             r = requests.post(CHROMA, json={
                 "title": "ClaudeCodeLights",
@@ -93,14 +104,17 @@ def init_session():
                 "author": {"name": "you", "contact": "you@example.com"},
                 "device_supported": list(DEVICES),
                 "category": "application",
-            }, timeout=5)
+            }, timeout=3)
             session_uri = r.json()["uri"]   # SDK returns the real session URI/port
+            init_cooldown_until = 0.0
             _print("Session opened: " + session_uri)
             return
         except Exception as e:
             _print(f"init_session attempt {attempt + 1} failed: {e!r}")
-            time.sleep(1)
-    _print("init_session: giving up (is Synapse running?)")
+            time.sleep(0.5)
+    init_cooldown_until = time.time() + INIT_COOLDOWN
+    _print(f"init_session: Chroma unavailable — status still tracked; "
+           f"retrying in {INIT_COOLDOWN}s (no Razer devices / Synapse not running?)")
 
 
 def end_session():
@@ -139,9 +153,8 @@ def watchdog():
 
 
 def set_color(r, g, b):
-    if not session_uri:
-        _print("set_color skipped - no active session")
-        return
+    if not LIGHTS_ENABLED or not session_uri:
+        return   # no devices / no session — status is still tracked for the tray
     bgr = (b << 16) | (g << 8) | r     # Chroma uses BGR, not RGB
     payload = {"effect": "CHROMA_STATIC", "param": {"color": bgr}}
     for device in DEVICES:

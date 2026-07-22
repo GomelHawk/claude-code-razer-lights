@@ -12,6 +12,7 @@ def reset_state():
     srv.session_uri = None
     srv.blinking = False
     srv.last_ping = time.time()
+    srv.init_cooldown_until = 0.0
     yield
 
 
@@ -254,6 +255,52 @@ def test_state_does_not_update_last_ping():
     srv.last_ping = 0
     make_handler("/state").do_GET()
     assert srv.last_ping == 0
+
+
+# --- no Razer devices / Chroma unavailable ---
+
+def test_init_session_skips_during_cooldown():
+    srv.init_cooldown_until = time.time() + 100
+    with patch.object(srv.requests, "post") as mock_post:
+        srv.init_session()
+    mock_post.assert_not_called()
+    assert srv.session_uri is None
+
+
+def test_init_session_backs_off_on_failure():
+    with patch.object(srv.requests, "post", side_effect=Exception("refused")), \
+         patch("time.sleep"):
+        srv.init_session()
+    assert srv.session_uri is None
+    assert srv.init_cooldown_until > time.time()   # future retry scheduled
+
+
+def test_lights_disabled_never_calls_chroma(monkeypatch):
+    monkeypatch.setattr(srv, "LIGHTS_ENABLED", False)
+    with patch.object(srv.requests, "post") as mock_post:
+        srv.init_session()
+    mock_post.assert_not_called()
+
+
+def test_set_color_noop_when_disabled(monkeypatch):
+    monkeypatch.setattr(srv, "LIGHTS_ENABLED", False)
+    srv.session_uri = "http://fake"
+    with patch.object(srv.requests, "put") as mock_put:
+        srv.set_color(1, 2, 3)
+    mock_put.assert_not_called()
+
+
+def test_status_tracked_without_chroma(monkeypatch):
+    # No devices: the tray's /state must still reflect Claude's status.
+    import json
+    monkeypatch.setattr(srv, "LIGHTS_ENABLED", False)
+    make_handler("/session-start?sid=A").do_GET()
+    make_handler("/working?sid=A").do_GET()
+    h = make_handler("/state")
+    h.do_GET()
+    data = json.loads(h.wfile.write.call_args[0][0].decode())
+    assert data["effective"] == "working"
+    assert srv.session_uri is None   # never opened a Chroma session
 
 
 # --- watchdog condition ---
