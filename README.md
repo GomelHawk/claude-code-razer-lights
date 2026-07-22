@@ -48,21 +48,43 @@ prompt — the next event after your answer is the tool actually running, i.e.
 wired to `working` so the red blink clears as soon as possible after you answer,
 instead of waiting for the next unrelated `PreToolUse`/`Stop` hook.
 
-## Tray app (colored sphere + usage)
+## Tray app (Claude spark icon + usage)
 
-A separate Windows tray companion, `tray_app.py`, shows a colored **sphere** that
-mirrors the Razer lighting, plus a click-to-open **usage flyout**:
+A separate Windows tray companion, `tray_app.py`, shows the **Claude spark icon**
+tinted to mirror the Razer lighting, plus a click-to-open **usage flyout**:
 
 - 🟢 green — idle · 🟡 yellow — working · 🔴 red, blinking — waiting for
-  confirmation · ⚫ grey — no active session
-- **Click the sphere** to open a card with your Claude usage — the same 5-hour,
+  confirmation · 🟠 Claude terracotta — no active session
+- **Click the icon** to open a card with your Claude usage — the same 5-hour,
   weekly, and usage-credit figures the `/usage` command shows, with reset timers.
 - Optional soft **chime** when a session needs confirmation (right-click menu).
 
-The sphere state comes from a read-only `GET /state` endpoint on the light server
+The icon's state comes from a read-only `GET /state` endpoint on the light server
 (added for this; it never affects the lighting). Usage comes from `usage.py`,
 which calls the same endpoint Claude Code's `/usage` uses and falls back to
 reconstructing totals from the local transcripts if that is unavailable.
+
+The flyout mirrors Claude Code's `/usage` card (example values):
+
+```text
+┌────────────────────────────────────────────────┐
+│ Your usage limits · Team                       │
+│                                                │
+│ 5-hour limit        Resets in 3 hr 12 min  35% │
+│ ████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
+│                                                │
+│ Weekly · all models    Resets Fri 4:00 PM  42% │
+│ ███████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
+│                                                │
+│ Usage credits                   $1.20 of $2.00 │
+│ ████████████████████████████░░░░░░░░░░░░░░░░░░ │
+└────────────────────────────────────────────────┘
+```
+
+Bars are blue, turning amber near a limit and red when critical. "Usage credits"
+is the monthly overage pool (shown only if your plan has one). If the official
+numbers can't be fetched, the card falls back to token/cost totals labelled
+"estimate".
 
 ```powershell
 pip install PySide6
@@ -95,9 +117,9 @@ that file while it runs, so no separate login is needed.
 
 **Notes:**
 
-- The **sphere follows the light server** — if `razer_light_server.py` isn't
-  running (or no Claude session is active), the sphere is grey; the tooltip says
-  which.
+- The **icon follows the light server** — if `razer_light_server.py` isn't
+  running (or no Claude session is active), the icon shows the neutral Claude
+  terracotta; the tooltip says which.
 - Usage is polled infrequently (every ~5 min, plus on open when stale) because
   the usage endpoint rate-limits (`429`); the last official figures are cached to
   `usage_cache.json`, so the card is never blank and a `429` never replaces good
@@ -145,20 +167,39 @@ artifacts; pushing a `vX.Y.Z` tag attaches the exes to a GitHub Release.
 
 ## Setup
 
+You can run this **two ways** — pick one:
+
+- **From source (Python):** copy the `.py` files and run them with Python. The
+  steps below use this path.
+- **Prebuilt executables (no Python):** download `RazerLightServer.exe` and
+  `ClaudeRazerTray.exe` — see
+  [Prebuilt executables](#prebuilt-executables-no-python-needed). The same steps
+  apply; just run the `.exe` instead of `python …` (each step notes the exe
+  equivalent).
+
+Either way, the **light server** runs on **Windows** (it needs the Chroma SDK) and
+the **hook script** runs in **WSL** (where Claude Code executes hooks). The WSL
+hook step is identical for both paths.
+
 ### 1. Install
 
-The server runs on **Windows** (needs access to the Chroma SDK); the hook script
-runs in **WSL** (where Claude Code executes hooks).
-
-**Windows** — in PowerShell:
+**Windows (from source)** — in PowerShell:
 
 ```powershell
 mkdir C:\razer-lights
 copy razer_light_server.py C:\razer-lights\
-pip install requests
+copy usage.py C:\razer-lights\
+copy tray_app.py C:\razer-lights\
+xcopy /I assets C:\razer-lights\assets    # the tray icon asset
+pip install requests PySide6
 ```
 
-**WSL** — in bash:
+**Windows (prebuilt exe)** — instead of the above, put `RazerLightServer.exe` and
+`ClaudeRazerTray.exe` in `C:\razer-lights\` (nothing to `pip install`; the icon
+asset is bundled inside the exe). See
+[Prebuilt executables](#prebuilt-executables-no-python-needed).
+
+**WSL (both paths)** — in bash; the hook just talks to the server over HTTP:
 
 ```bash
 mkdir -p /home/user/razer-lights
@@ -187,6 +228,9 @@ Run it in a visible window so you can see its diagnostics:
 ```powershell
 python C:\razer-lights\razer_light_server.py
 ```
+
+(Prebuilt exe: run `C:\razer-lights\RazerLightServer.exe` — it's windowless, so
+watch `razer_light_server.log` next to it instead of console output.)
 
 In a second PowerShell window, walk through the states (use `curl.exe`, not the
 PowerShell `curl` alias). Each request passes a `?sid=` to identify the session:
@@ -219,13 +263,18 @@ project instead.
 
 ### 5. Run at login (windowless)
 
-In an **Administrator** PowerShell:
+Two things can auto-start: the **light server** (background service) and the
+**tray app** (system-tray icon). The commands below use the prebuilt exes; if you
+run from source, swap in `pythonw.exe` as noted in the comments.
+
+**Light server — Scheduled Task.** In an **Administrator** PowerShell:
 
 ```powershell
 $action = New-ScheduledTaskAction `
-    -Execute "C:\Python314\pythonw.exe" `
-    -Argument "C:\razer-lights\razer_light_server.py" `
+    -Execute "C:\razer-lights\RazerLightServer.exe" `
     -WorkingDirectory "C:\razer-lights"
+# From source instead of the exe:
+#   -Execute "C:\Python314\pythonw.exe" -Argument "C:\razer-lights\razer_light_server.py"
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 $trigger.Delay = "PT10S"   # wait 10 s for Synapse to start
@@ -241,23 +290,37 @@ Register-ScheduledTask -TaskName "RazerLights" -Action $action -Trigger $trigger
 Start-ScheduledTask -TaskName "RazerLights"
 ```
 
-Use the **full path** to `pythonw.exe` (adjust if your Python is installed elsewhere)
-so the task doesn't depend on `PATH` being set correctly in the scheduler's environment.
-The 10-second delay gives Razer Synapse time to start before the server tries to open
-a Chroma session.
+Use the **full path** to the executable so the task doesn't depend on `PATH` in the
+scheduler's environment. The 10-second delay gives Razer Synapse time to start
+before the server opens a Chroma session. The server exe is built `--windowed`, so
+it has no console (from source, use `pythonw.exe`, not `python.exe`, for the same
+effect). Diagnostics go to `razer_light_server.log` next to the executable.
 
-The `-Force` flag overwrites any existing `RazerLights` task, so this command is
-safe to re-run whenever you change the action/trigger/settings above. Without it,
-re-registering fails with a "file already exists" error (`HRESULT 0x800700b7`)
-because a task with that name is already registered.
+**Tray app — Startup shortcut.** The tray needs to run in your interactive desktop
+session so its icon appears, so a Startup-folder shortcut is simpler than a task
+(no admin required):
 
-`pythonw.exe` runs without a console window. All diagnostics are written to
-`razer_light_server.log` in the same directory as the script — check that file
-if something isn't working.
+```powershell
+$startup = [Environment]::GetFolderPath('Startup')
+$ws = New-Object -ComObject WScript.Shell
+$sc = $ws.CreateShortcut("$startup\ClaudeRazerTray.lnk")
+$sc.TargetPath = "C:\razer-lights\ClaudeRazerTray.exe"
+$sc.WorkingDirectory = "C:\razer-lights"
+# From source instead: TargetPath = pythonw.exe, and
+#   $sc.Arguments = "C:\razer-lights\tray_app.py"
+$sc.Save()
+```
+
+The `-Force` flag overwrites any existing `RazerLights` task, so the server command
+is safe to re-run whenever you change the action/trigger/settings. Without it,
+re-registering fails with a "file already exists" error (`HRESULT 0x800700b7`).
 
 If the server is already running when the trigger fires (e.g. after an unlock
 rather than a full logout), the new instance detects the occupied port, logs a
 message, and exits cleanly so the task doesn't show as failed.
+
+To update the exes later: `Stop-ScheduledTask -TaskName RazerLights`, replace the
+files, then `Start-ScheduledTask -TaskName RazerLights` (and relaunch the tray).
 
 ### 6. Test through Claude Code
 

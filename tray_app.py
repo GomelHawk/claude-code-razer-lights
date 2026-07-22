@@ -1,11 +1,11 @@
 # tray_app.py
 #
-# Windows system-tray companion to the Razer light server. Shows a colored
-# sphere that mirrors the Razer lighting state, and a click-to-open flyout with
+# Windows system-tray companion to the Razer light server. Shows the Claude spark
+# icon tinted to mirror the Razer lighting state, and a click-to-open flyout with
 # your Claude usage (the same 5-hour / weekly / credits data as `/usage`).
 #
-#   sphere:  green = idle   yellow = working   red (blinking) = confirm
-#            grey = no active Claude session
+#   icon:  green = idle   yellow = working   red (blinking) = confirm
+#          Claude terracotta = no active Claude session
 #   click:   opens a dark card with usage bars, matching the /usage popup
 #   chime:   optional soft sound when a session needs confirmation (menu toggle)
 #
@@ -409,7 +409,7 @@ class RazerTray(QtCore.QObject):
     def _set_sound(self, on):
         self.sound_on = on
 
-    # --- state / sphere ---
+    # --- state / icon ---
 
     def on_state(self, st):
         eff = st.get("effective", "none")
