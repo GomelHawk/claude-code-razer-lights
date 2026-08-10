@@ -311,6 +311,12 @@ def main():
             print_official(data, tier=read_tier(home))
             return
         except urllib.error.HTTPError as e:
+            if e.code == 401:
+                sys.stderr.write(
+                    "Your Claude Code login has expired.\n"
+                    "Run `claude` (or restart Claude Code) to sign in again, then try this again.\n"
+                )
+                return
             sys.stderr.write(f"endpoint HTTP {e.code} ({e.reason}) — falling back to local estimate\n")
         except Exception as e:  # noqa: BLE001 - fallback is the point
             sys.stderr.write(f"endpoint failed: {e!r} — falling back to local estimate\n")

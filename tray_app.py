@@ -25,8 +25,11 @@ import json
 import time
 import logging
 import threading
+import traceback
+import faulthandler
 import urllib.request
 import urllib.error
+from logging.handlers import RotatingFileHandler
 
 try:
     from PySide6 import QtCore, QtGui, QtWidgets
@@ -47,10 +50,31 @@ LOG_FILE = os.path.join(SCRIPT_DIR, "tray_app.log")
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "tray_config.json")
 USAGE_CACHE = os.path.join(SCRIPT_DIR, "usage_cache.json")
 
-logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
-                    format="%(asctime)s %(levelname)s %(message)s",
-                    datefmt="%Y-%m-%d %H:%M:%S")
+_handler = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 log = logging.getLogger("tray")
+
+# Frozen/windowed builds have no console — an unhandled exception anywhere outside
+# an explicit try/except would otherwise vanish with nothing but a bare exit code.
+# Log it in full before the process dies so a crash is diagnosable after the fact.
+def _log_uncaught(exc_type, exc_value, exc_tb):
+    log.critical("UNCAUGHT EXCEPTION (main thread):\n%s",
+                 "".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+
+def _log_uncaught_thread(args):
+    log.critical("UNCAUGHT EXCEPTION (thread %s):\n%s", args.thread.name,
+                 "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)))
+
+
+sys.excepthook = _log_uncaught
+threading.excepthook = _log_uncaught_thread
+
+# Catches native-level faults (e.g. a Qt/PySide abort) that bypass sys.excepthook.
+_fault_log = open(LOG_FILE, "a", buffering=1, encoding="utf-8")
+faulthandler.enable(file=_fault_log)
 
 
 def _load_config():
@@ -291,6 +315,8 @@ class Worker(QtCore.QObject):
                     st["reachable"] = True
                     self.state_ready.emit(st)
             except Exception as e:
+                # Polls every 1.5s and fails routinely whenever the light server
+                # isn't up yet — a one-line warning, not a full traceback per poll.
                 log.warning("state poll failed: %r", e)
                 self.state_ready.emit({"effective": "none", "reachable": False,
                                        "active": False, "blinking": False, "count": 0})
@@ -313,9 +339,16 @@ class Worker(QtCore.QObject):
                     log.warning("usage 429 (retry-after=%s) — keeping last known", retry)
                     self.usage_ratelimited.emit(retry)
                     return
+                if e.code == 401:
+                    log.warning("usage 401 — Claude Code login expired")
+                    self.usage_error.emit(
+                        "Your Claude Code login has expired.\n"
+                        "Restart Claude Code (or run `claude` to sign in) to fix this."
+                    )
+                    return
                 log.warning("usage HTTP %s — trying local estimate", e.code)
-            except Exception as e:
-                log.warning("usage endpoint failed: %r (home=%s) — trying estimate", e, self.home)
+            except Exception:
+                log.exception("usage endpoint failed (home=%s) — trying estimate", self.home)
 
             # Local-transcript estimate — only when the official call failed (non-429).
             try:
@@ -331,7 +364,7 @@ class Worker(QtCore.QObject):
                 else:
                     self.usage_error.emit(f"No usage data.\nLooking in: {self.home}")
             except Exception as e:  # noqa: BLE001
-                log.error("usage fallback failed: %r", e)
+                log.exception("usage fallback failed")
                 self.usage_error.emit(f"Usage unavailable: {e}\nLooking in: {self.home}")
         self._bg(run)
 
@@ -348,7 +381,8 @@ class RazerTray(QtCore.QObject):
         self.usage_tier = None
         self.usage_source = None
         self.last_fetch = 0.0
-        log.info("tray start: home=%s state_url=%s", self.home, STATE_URL)
+        log.info("tray start: pid=%s frozen=%s exe=%s home=%s state_url=%s",
+                 os.getpid(), getattr(sys, "frozen", False), sys.executable, self.home, STATE_URL)
 
         self._load_usage_cache()
 
@@ -517,7 +551,13 @@ def main():
         sys.stderr.write("No system tray available on this platform.\n")
         return 1
     _tray = RazerTray(app)
-    return app.exec()
+    try:
+        code = app.exec()
+    except Exception:
+        log.exception("app.exec() raised — Qt event loop terminated abnormally")
+        raise
+    log.info("clean shutdown: exit code %s", code)
+    return code
 
 
 if __name__ == "__main__":

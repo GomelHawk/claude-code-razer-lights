@@ -23,8 +23,10 @@ import logging
 import os
 import sys
 import json
+import traceback
 import requests
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from logging.handlers import RotatingFileHandler
 from urllib.parse import urlparse, parse_qs
 
 CHROMA = "http://localhost:54235/razer/chromasdk"
@@ -39,18 +41,33 @@ _BASE_DIR = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) \
     else os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(_BASE_DIR, "razer_light_server.log")
 
-logging.basicConfig(
-    filename=LOG_FILE,
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+_handler = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 log = logging.getLogger(__name__)
 
 
 def _print(msg):
     print(msg)
     log.info(msg)
+
+
+# Run windowless via the Scheduled Task (no console) — an unhandled exception
+# anywhere outside an explicit try/except would otherwise vanish along with the
+# process, leaving only a bare exit code. Log it in full before it dies.
+def _log_uncaught(exc_type, exc_value, exc_tb):
+    log.critical("UNCAUGHT EXCEPTION (main thread):\n%s",
+                 "".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+
+def _log_uncaught_thread(args):
+    log.critical("UNCAUGHT EXCEPTION (thread %s):\n%s", args.thread.name,
+                 "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)))
+
+
+sys.excepthook = _log_uncaught
+threading.excepthook = _log_uncaught_thread
 
 session_uri = None
 session_states = {}    # sid -> "idle" | "working" | "confirm"
@@ -135,8 +152,8 @@ def heartbeat():
         if session_uri:
             try:
                 requests.put(session_uri + "/heartbeat", timeout=5)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("heartbeat failed: %r", e)
         time.sleep(4)
 
 
@@ -160,7 +177,9 @@ def set_color(r, g, b):
     for device in DEVICES:
         try:
             resp = requests.put(session_uri + "/" + device, json=payload, timeout=5)
-            _print(f"set_color {device} {(r, g, b)} -> {resp.status_code}")
+            # DEBUG, not INFO: the blink loop alone calls this twice a second and
+            # would otherwise dominate the log with routine, uninteresting lines.
+            log.debug("set_color %s %s -> %s", device, (r, g, b), resp.status_code)
         except Exception as e:
             _print(f"set_color {device} FAILED: {e!r}")
 
@@ -261,10 +280,15 @@ if __name__ == "__main__":
 
     threading.Thread(target=heartbeat, daemon=True).start()
     threading.Thread(target=watchdog, daemon=True).start()
-    _print(f"Razer light server listening on http://{LISTEN[0]}:{LISTEN[1]}")
+    _print(f"Razer light server listening on http://{LISTEN[0]}:{LISTEN[1]} "
+           f"(pid={os.getpid()}, frozen={getattr(sys, 'frozen', False)}, exe={sys.executable})")
     _print("Note: Razer Synapse must be running for lighting to change.")
     try:
         server.serve_forever()
+    except KeyboardInterrupt:
+        _print("clean shutdown: KeyboardInterrupt")
     except Exception as e:
         _print(f"serve_forever exited unexpectedly: {e!r}")
         raise
+    else:
+        _print("clean shutdown: serve_forever returned")
