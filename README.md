@@ -1,5 +1,9 @@
 # Claude Code Razer Lights
 
+[![DEPRECATED](https://img.shields.io/badge/DEPRECATED-use%20TintaView-red?style=for-the-badge)](https://github.com/GomelHawk/TintaView)
+
+> ⚠️ **This project is deprecated.** Please use the new project instead: **[GomelHawk/TintaView](https://github.com/GomelHawk/TintaView)**
+
 ![CI](https://github.com/GomelHawk/claude-code-razer-lights/actions/workflows/ci.yml/badge.svg)
 
 Two **independent** [Claude Code](https://www.claude.com/product/claude-code)
